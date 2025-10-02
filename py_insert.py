@@ -36,9 +36,51 @@ def connect_snow():
 def save_to_snowflake(snow, message):
     record = json.loads(message)
     logging.debug('inserting record to db')
-    row = (record['txid'],record['rfid'],record["item"],record["purchase_time"],record["expiration_time"],record['days'],record['name'],json.dumps(record['address']),record['phone'],record['email'],json.dumps(record['emergency_contact']))
-    # this dataset has variant records, so utilizing an executemany() is not possible, must insert 1 record at a time
-    snow.cursor().execute("INSERT INTO CLIENT_SUPPORT_ORDERS (\"TXID\",\"RFID\",\"ITEM\",\"PURCHASE_TIME\", \"EXPIRATION_TIME\",\"DAYS\",\"NAME\",\"ADDRESS\",\"PHONE\",\"EMAIL\",\"EMERGENCY_CONTACT\") SELECT ?,?,?,?,?,?,?,PARSE_JSON(?),?,?,PARSE_JSON(?)", row)
+
+    row = (
+        record['txid'],
+        record['rfid'],
+        record['customer_id'],
+        record['product_id'],
+        record['item'],
+        record.get('bag_size'),
+        record.get('unit_price'),
+        record.get('quantity'),
+        record.get('total_price'),
+        record.get('origin_country'),
+        record['purchase_time'],
+        record.get('shipped_date'),
+        record.get('delivered_date'),
+        record.get('region'),
+        record.get('name'),
+        record.get('street_address'),
+        record.get('city'),
+        record.get('country'),
+        record.get('postalcode'),
+        record.get('phone'),
+        record.get('email'),
+        record.get('warehouse'),
+        record.get('shipping_method'),
+        record.get('delivery_status'),
+        record.get('payment_method'),
+        record.get('payment_status'),
+        record.get('fair_trade_certified'),
+        record.get('organic_certified'),
+        record.get('carbon_score'),
+        record.get('delivery_delay_days'),
+    )
+
+    sql = """
+        INSERT INTO CLIENT_SUPPORT_ORDERS (
+            "TXID","RFID","CUSTOMER_ID","PRODUCT_ID","ITEM","BAG_SIZE","UNIT_PRICE","QUANTITY",
+            "TOTAL_PRICE","ORIGIN_COUNTRY","PURCHASE_TIME","SHIPPED_DATE","DELIVERED_DATE","REGION",
+            "NAME","STREET_ADDRESS","CITY","COUNTRY","POSTALCODE","PHONE","EMAIL","WAREHOUSE",
+            "SHIPPING_METHOD","DELIVERY_STATUS","PAYMENT_METHOD","PAYMENT_STATUS",
+            "FAIR_TRADE_CERTIFIED","ORGANIC_CERTIFIED","CARBON_SCORE","DELIVERY_DELAY_DAYS"
+        )
+        SELECT ?,?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?,?
+    """
+    snow.cursor().execute(sql, row)
     logging.debug(f"inserted order {record}")
 
 
