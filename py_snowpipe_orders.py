@@ -43,27 +43,56 @@ def connect_snow():
 def save_to_snowflake(snow, batch, temp_dir, ingest_manager):
     logging.debug('inserting batch to db')
 
-    # Build DataFrame from dict rows (already in target column names)
     pandas_df = pd.DataFrame(batch)
+    if pandas_df.empty:
+        logging.warning("Skipping save: empty batch")
+        return
 
-    # Ensure datetime columns are proper timestamps for Parquet → Snowflake
+    # Coerce to DATE (no time)
     for col in ["PURCHASE_TIME", "SHIPPED_DATE", "DELIVERED_DATE"]:
         if col in pandas_df.columns:
-            pandas_df[col] = pd.to_datetime(pandas_df[col], errors='coerce')
+            pandas_df[col] = pd.to_datetime(pandas_df[col], errors="coerce").dt.date
 
-    arrow_table = pa.Table.from_pandas(pandas_df)
+    # Prepare file path BEFORE any try/except so it always exists
     file_name = f"{str(uuid.uuid1())}.parquet"
     out_path = f"{temp_dir.name}/{file_name}"
+    logging.info("Writing parquet to %s", out_path)
 
-    pq.write_table(arrow_table, out_path, use_dictionary=False, compression='SNAPPY')
+    # Convert to Arrow
+    try:
+        arrow_table = pa.Table.from_pandas(pandas_df, preserve_index=False)
+    except Exception:
+        logging.exception("Arrow conversion failed")
+        return  # don't reference out_path here if conversion failed
 
-    # Put file into the table stage of CLIENT_SUPPORT_ORDERS
-    snow.cursor().execute("PUT 'file://{0}' @%CLIENT_SUPPORT_ORDERS_PY_SNOWPIPE".format(out_path))
-    os.unlink(out_path)
+    # Write Parquet
+    try:
+        pq.write_table(
+            arrow_table,
+            out_path,
+            use_dictionary=False,
+            compression="SNAPPY"
+        )
+    except Exception:
+        logging.exception("Parquet write failed")
+        return
 
-    # Tell Snowpipe to ingest the new staged file
-    resp = ingest_manager.ingest_files([StagedFile(file_name, None)])
-    logging.info(f"response from snowflake for file {file_name}: {resp['responseCode']}")
+    # PUT to table stage
+    try:
+        snow.cursor().execute("PUT 'file://{0}' @%CLIENT_SUPPORT_ORDERS_PY_SNOWPIPE".format(out_path))
+        logging.info("PUT succeeded: %s", file_name)
+        os.unlink(out_path)
+    except Exception:
+        logging.exception("PUT to table stage failed (or unlink failed)")
+        return
+
+    # Trigger Snowpipe
+    try:
+        resp = ingest_manager.ingest_files([StagedFile(file_name, None)])
+        logging.info("Ingest response: %s", resp)
+    except Exception:
+        logging.exception("Snowpipe ingest failed")
+        return
 
 
 if __name__ == "__main__":    
