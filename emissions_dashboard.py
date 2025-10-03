@@ -3,13 +3,16 @@ import snowflake.connector
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 # CONNECT TO SNOWFLAKE AND IMPORT CARBON EMISSIONS DATA FOR STREAMLIT DASHBOARD
 conn = snowflake.connector.connect(
-    user='AMIKA', # change to your user
-    password='ETLwarehousing1', # change to your pw
-    account='fcvvvvl-zib75701', # the group account identifier
+    user=os.getenv('USERNAME'), # add your username to your .env file
+    password=os.getenv('SNOWFLAKE_PASSWORD'), # add Yyour password to your .env file
+    account=os.getenv('SNOWFLAKE_ACCOUNT'), # add the group account identifier to your .env file
     warehouse='ANALYTICS_WH',
     database='STREAMLIT_APPS',
     schema='INGEST_COPY',
