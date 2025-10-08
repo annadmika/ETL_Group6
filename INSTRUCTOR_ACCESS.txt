@@ -1,0 +1,17 @@
+
+1. YOUR FULL NAME: Anna Mika (Group 6)
+
+2. NAME of user created : INSTRUCTOR_USER
+3. PASSWORD of user created : 234
+
+4. YOUR ACCOUNT URL: https://app.snowflake.com/fcvvvvl/zib75701/#/homepage
+   
+
+5. CREDENTIALS FOR INSTRUCTOR:
+   - Username: INSTRUCTOR_USER
+   - Password: 234
+   - Role: ACCOUNTADMIN
+
+
+6. CONFIRMATION MESSAGE:
+   "Instructor evaluation access has been granted to my Snowflake account"
