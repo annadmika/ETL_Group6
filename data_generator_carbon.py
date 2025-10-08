@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta
 from faker import Faker
 
+
 fake = Faker()
 
 # --- Warehouse metadata ---
