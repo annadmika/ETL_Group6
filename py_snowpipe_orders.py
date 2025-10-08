@@ -14,7 +14,8 @@ from snowflake.ingest import StagedFile
 load_dotenv()
 from cryptography.hazmat.primitives import serialization
 
-logging.basicConfig(level=logging.WARN)
+import logging, sys, traceback
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
 
 
 def connect_snow():
@@ -33,10 +34,10 @@ def connect_snow():
         user=os.getenv("SNOWFLAKE_USER"),
         private_key=pkb,
         role="INGEST",
-        database="INGEST",
-        schema="INGEST",
-        warehouse="INGEST",
-        session_parameters={'QUERY_TAG': 'py-snowpipe'}, 
+        database="ECO_COFFEE_DWH",
+        schema="RAW",
+        warehouse="PIPELINE_WH",
+        session_parameters={'QUERY_TAG': 'py-snowpipe-orders'}
     )
 
 
@@ -48,22 +49,21 @@ def save_to_snowflake(snow, batch, temp_dir, ingest_manager):
         logging.warning("Skipping save: empty batch")
         return
 
-    # Coerce to DATE (no time)
+    # Coerce to DATE (no time) for the three date fields
     for col in ["PURCHASE_TIME", "SHIPPED_DATE", "DELIVERED_DATE"]:
         if col in pandas_df.columns:
             pandas_df[col] = pd.to_datetime(pandas_df[col], errors="coerce").dt.date
 
-    # Prepare file path BEFORE any try/except so it always exists
+    # Prepare file path BEFORE any try/except so variables always exist
     file_name = f"{str(uuid.uuid1())}.parquet"
     out_path = f"{temp_dir.name}/{file_name}"
-    logging.info("Writing parquet to %s", out_path)
 
     # Convert to Arrow
     try:
         arrow_table = pa.Table.from_pandas(pandas_df, preserve_index=False)
     except Exception:
         logging.exception("Arrow conversion failed")
-        return  # don't reference out_path here if conversion failed
+        return
 
     # Write Parquet
     try:
@@ -71,16 +71,17 @@ def save_to_snowflake(snow, batch, temp_dir, ingest_manager):
             arrow_table,
             out_path,
             use_dictionary=False,
-            compression="SNAPPY"
+            compression='SNAPPY'
         )
+        logging.info(f"Wrote parquet {file_name} with {len(batch)} rows")
     except Exception:
         logging.exception("Parquet write failed")
         return
 
-    # PUT to table stage
+    # PUT to table stage for RAW_CLIENT_SUPPORT_ORDERS_PY_SNOWPIPE
     try:
-        snow.cursor().execute("PUT 'file://{0}' @%CLIENT_SUPPORT_ORDERS_PY_SNOWPIPE".format(out_path))
-        logging.info("PUT succeeded: %s", file_name)
+        snow.cursor().execute("PUT 'file://{0}' @ECO_COFFEE_DWH.RAW.%RAW_CLIENT_SUPPORT_ORDERS_PY_SNOWPIPE".format(out_path))
+        logging.info(f"PUT succeeded for {file_name}")
         os.unlink(out_path)
     except Exception:
         logging.exception("PUT to table stage failed (or unlink failed)")
@@ -89,73 +90,89 @@ def save_to_snowflake(snow, batch, temp_dir, ingest_manager):
     # Trigger Snowpipe
     try:
         resp = ingest_manager.ingest_files([StagedFile(file_name, None)])
-        logging.info("Ingest response: %s", resp)
+        logging.info(f"Ingest requested for {file_name}: {resp['responseCode']}")
     except Exception:
         logging.exception("Snowpipe ingest failed")
         return
 
 
-if __name__ == "__main__":    
-    args = sys.argv[1:]
-    batch_size = int(args[0])
-    snow = connect_snow()
-    batch = []
-    temp_dir = tempfile.TemporaryDirectory()
-    private_key = "-----BEGIN PRIVATE KEY-----\n" + os.getenv("PRIVATE_KEY") + "\n-----END PRIVATE KEY-----\n"
-    host = os.getenv("SNOWFLAKE_ACCOUNT") + ".snowflakecomputing.com"
-    ingest_manager = SimpleIngestManager(account=os.getenv("SNOWFLAKE_ACCOUNT"),
-                                         host=host,
-                                         user=os.getenv("SNOWFLAKE_USER"),
-                                         pipe='INGEST.INGEST.CLIENT_SUPPORT_ORDERS_PIPE',
-                                         private_key=private_key)
-    for message in sys.stdin:
-        if message != '\n':
-            record = json.loads(message)
+if __name__ == "__main__":
+    try:
+        args = sys.argv[1:]
+        batch_size = int(args[0])
+        snow = connect_snow()
+        batch = []
+        temp_dir = tempfile.TemporaryDirectory()
+        private_key = "-----BEGIN PRIVATE KEY-----\n" + os.getenv("PRIVATE_KEY") + "\n-----END PRIVATE KEY-----\n"
+        host = os.getenv("SNOWFLAKE_ACCOUNT") + ".snowflakecomputing.com"
+        ingest_manager = SimpleIngestManager(
+            account=os.getenv("SNOWFLAKE_ACCOUNT"),
+            host=host,
+            user=os.getenv("SNOWFLAKE_USER"),
+            pipe='ECO_COFFEE_DWH.RAW.CLIENT_SUPPORT_ORDERS_PIPE',
+            private_key=private_key
+        )
+        processed = 0
+        print("Starting Snowpipe orders ingest...", flush=True)
+        for message in sys.stdin:
+            if message == '\n':
+                break
+            rec = json.loads(message)
+            processed += 1
             batch.append({
-                "TXID": record["txid"],
-                "RFID": record["rfid"],
-                "CUSTOMER_ID": record["customer_id"],
-                "PRODUCT_ID": record["product_id"],
+                "TXID": rec["txid"],
+                "RFID": rec["rfid"],
+                "CUSTOMER_ID": rec["customer_id"],
+                "PRODUCT_ID": rec["product_id"],
 
-                "ITEM": record["item"],
-                "BAG_SIZE": record.get("bag_size"),
-                "UNIT_PRICE": record.get("unit_price"),
-                "QUANTITY": record.get("quantity"),
-                "TOTAL_PRICE": record.get("total_price"),
+                "ITEM": rec["item"],
+                "BAG_SIZE": rec.get("bag_size"),
+                "UNIT_PRICE": rec.get("unit_price"),
+                "QUANTITY": rec.get("quantity"),
+                "TOTAL_PRICE": rec.get("total_price"),
 
-                "ORIGIN_COUNTRY": record.get("origin_country"),
-                "FAIR_TRADE_CERTIFIED": record.get("fair_trade_certified"),
-                "ORGANIC_CERTIFIED": record.get("organic_certified"),
+                "ORIGIN_COUNTRY": rec.get("origin_country"),
+                "FAIR_TRADE_CERTIFIED": rec.get("fair_trade_certified"),
+                "ORGANIC_CERTIFIED": rec.get("organic_certified"),
 
-                "PURCHASE_TIME": record["purchase_time"],
-                "SHIPPED_DATE": record.get("shipped_date"),
-                "DELIVERED_DATE": record.get("delivered_date"),
+                "PURCHASE_TIME": rec["purchase_time"],
+                "SHIPPED_DATE": rec.get("shipped_date"),
+                "DELIVERED_DATE": rec.get("delivered_date"),
 
-                "REGION": record.get("region"),
-                "NAME": record.get("name"),
-                "STREET_ADDRESS": record.get("street_address"),
-                "CITY": record.get("city"),
-                "COUNTRY": record.get("country"),
-                "POSTALCODE": record.get("postalcode"),
-                "PHONE": record.get("phone"),
-                "EMAIL": record.get("email"),
+                "REGION": rec.get("region"),
+                "NAME": rec.get("name"),
+                "STREET_ADDRESS": rec.get("street_address"),
+                "CITY": rec.get("city"),
+                "COUNTRY": rec.get("country"),
+                "POSTALCODE": rec.get("postalcode"),
+                "PHONE": rec.get("phone"),
+                "EMAIL": rec.get("email"),
 
-                "WAREHOUSE": record.get("warehouse"),
-                "SHIPPING_METHOD": record.get("shipping_method"),
-                "DELIVERY_STATUS": record.get("delivery_status"),
-                "PAYMENT_METHOD": record.get("payment_method"),
-                "PAYMENT_STATUS": record.get("payment_status"),
+                "WAREHOUSE": rec.get("warehouse"),
+                "SHIPPING_METHOD": rec.get("shipping_method"),
+                "DELIVERY_STATUS": rec.get("delivery_status"),
+                "PAYMENT_METHOD": rec.get("payment_method"),
+                "PAYMENT_STATUS": rec.get("payment_status"),
 
-                "DELIVERY_DELAY_DAYS": record.get("delivery_delay_days"),
-                "CARBON_SCORE": record.get("carbon_score"),
+                "DELIVERY_DELAY_DAYS": rec.get("delivery_delay_days"),
+                "CARBON_SCORE": rec.get("carbon_score"),
             })
             if len(batch) == batch_size:
                 save_to_snowflake(snow, batch, temp_dir, ingest_manager)
+                print(f"Progress: {processed} records processed...", flush=True)
                 batch = []
-        else:
-            break    
-    if len(batch) > 0:
-        save_to_snowflake(snow, batch, temp_dir, ingest_manager)
-    temp_dir.cleanup()
-    snow.close()
-    logging.info("Ingest complete")
+        if len(batch) > 0:
+            save_to_snowflake(snow, batch, temp_dir, ingest_manager)
+        print(f"Done. Total records processed: {processed}", flush=True)
+    except Exception:
+        logging.error("Fatal error:\n%s", traceback.format_exc())
+    finally:
+        try:
+            temp_dir.cleanup()
+        except Exception:
+            pass
+        try:
+            snow.close()
+        except Exception:
+            pass
+        logging.info("Ingest complete")

@@ -14,7 +14,8 @@ from snowflake.ingest import StagedFile
 load_dotenv()
 from cryptography.hazmat.primitives import serialization
 
-logging.basicConfig(level=logging.WARN)
+import logging, sys, traceback
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
 
 
 def connect_snow():
@@ -33,9 +34,9 @@ def connect_snow():
         user=os.getenv("SNOWFLAKE_USER"),
         private_key=pkb,
         role="INGEST",
-        database="INGEST",
-        schema="INGEST",
-        warehouse="INGEST",
+        database="ECO_COFFEE_DWH",
+        schema="RAW",
+        warehouse="PIPELINE_WH",
         session_parameters={'QUERY_TAG': 'py-snowpipe'}, 
     )
 
@@ -44,44 +45,79 @@ def save_to_snowflake(snow, batch, temp_dir, ingest_manager):
     logging.debug('inserting batch to db')
 
     pandas_df = pd.DataFrame(batch)
+    if pandas_df.empty:
+        logging.warning("Skipping save: empty batch")
+        return
 
     # Ensure DATE type for reporting_month
     if "REPORTING_MONTH" in pandas_df.columns:
         pandas_df["REPORTING_MONTH"] = pd.to_datetime(pandas_df["REPORTING_MONTH"], errors='coerce').dt.date
 
-    arrow_table = pa.Table.from_pandas(pandas_df)
+    # Prepare file path BEFORE any try/except so it always exists
     file_name = f"{str(uuid.uuid1())}.parquet"
     out_path = f"{temp_dir.name}/{file_name}"
 
-    pq.write_table(arrow_table, out_path, use_dictionary=False, compression='SNAPPY')
+    # Convert to Arrow
+    try:
+        arrow_table = pa.Table.from_pandas(pandas_df, preserve_index=False)
+    except Exception:
+        logging.exception("Arrow conversion failed")
+        return
 
-    # Put file into the table stage of CARBON_EMISSIONS_PY_SNOWPIPE
-    snow.cursor().execute("PUT 'file://{0}' @%CARBON_EMISSIONS_PY_SNOWPIPE".format(out_path))
-    os.unlink(out_path)
+    # Write Parquet
+    try:
+        pq.write_table(
+            arrow_table,
+            out_path,
+            use_dictionary=False,
+            compression='SNAPPY'
+        )
+        logging.info(f"Wrote parquet {file_name} with {len(batch)} rows")
+    except Exception:
+        logging.exception("Parquet write failed")
+        return
+
+    # PUT to table stage
+    try:
+        snow.cursor().execute("PUT 'file://{0}' @ECO_COFFEE_DWH.RAW.%RAW_CARBON_EMISSIONS_PY_SNOWPIPE".format(out_path))
+        logging.info(f"PUT succeeded for {file_name}")
+        os.unlink(out_path)
+    except Exception:
+        logging.exception("PUT to table stage failed (or unlink failed)")
+        return
 
     # Trigger Snowpipe
-    resp = ingest_manager.ingest_files([StagedFile(file_name, None)])
-    logging.info(f"response from snowflake for file {file_name}: {resp['responseCode']}")
+    try:
+        resp = ingest_manager.ingest_files([StagedFile(file_name, None)])
+        logging.info(f"Ingest requested for {file_name}: {resp['responseCode']}")
+    except Exception:
+        logging.exception("Snowpipe ingest failed")
+        return
 
 
-if __name__ == "__main__":    
-    args = sys.argv[1:]
-    batch_size = int(args[0])
-    snow = connect_snow()
-    batch = []
-    temp_dir = tempfile.TemporaryDirectory()
-    private_key = "-----BEGIN PRIVATE KEY-----\n" + os.getenv("PRIVATE_KEY") + "\n-----END PRIVATE KEY-----\n"
-    host = os.getenv("SNOWFLAKE_ACCOUNT") + ".snowflakecomputing.com"
-    ingest_manager = SimpleIngestManager(account=os.getenv("SNOWFLAKE_ACCOUNT"),
-                                        host=os.getenv("SNOWFLAKE_ACCOUNT") + ".snowflakecomputing.com",
-                                        user=os.getenv("SNOWFLAKE_USER"),
-                                        pipe='INGEST.INGEST.CARBON_EMISSIONS_PIPE',
-                                        private_key=private_key        
+if __name__ == "__main__":
+    try:
+        args = sys.argv[1:]
+        batch_size = int(args[0])
+        snow = connect_snow()
+        batch = []
+        temp_dir = tempfile.TemporaryDirectory()
+        private_key = "-----BEGIN PRIVATE KEY-----\n" + os.getenv("PRIVATE_KEY") + "\n-----END PRIVATE KEY-----\n"
+        host = os.getenv("SNOWFLAKE_ACCOUNT") + ".snowflakecomputing.com"
+        ingest_manager = SimpleIngestManager(
+                                            account=os.getenv("SNOWFLAKE_ACCOUNT"),
+                                            host=os.getenv("SNOWFLAKE_ACCOUNT") + ".snowflakecomputing.com",
+                                            user=os.getenv("SNOWFLAKE_USER"),
+                                            pipe='ECO_COFFEE_DWH.RAW.CARBON_EMISSIONS_PIPE',
+                                            private_key=private_key
 )
-    for message in sys.stdin:
-        if message != '\n':
+        processed = 0
+        print("Starting Snowpipe carbon ingest...", flush=True)
+        for message in sys.stdin:
+            if message == '\n':
+                break
             rec = json.loads(message)
-
+            processed += 1
             batch.append({
                 "RECORD_ID": rec["record_id"],
                 "REPORTING_MONTH": rec["reporting_month"],
@@ -95,16 +131,22 @@ if __name__ == "__main__":
                 "AVG_BATCH_SIZE_KG": rec["avg_batch_size_kg"],
                 "ESTIMATED_EMISSIONS_KGCO2E": rec["estimated_emissions_kgCO2e"],
             })
-
             if len(batch) == batch_size:
                 save_to_snowflake(snow, batch, temp_dir, ingest_manager)
+                print(f"Progress: {processed} records processed...", flush=True)
                 batch = []
-        else:
-            break
-
-    if len(batch) > 0:
-        save_to_snowflake(snow, batch, temp_dir, ingest_manager)
-
-    temp_dir.cleanup()
-    snow.close()
-    logging.info("Ingest complete")
+        if len(batch) > 0:
+            save_to_snowflake(snow, batch, temp_dir, ingest_manager)
+        print(f"Done. Total records processed: {processed}", flush=True)
+    except Exception:
+        logging.error("Fatal error:\n%s", traceback.format_exc())
+    finally:
+        try:
+            temp_dir.cleanup()
+        except Exception:
+            pass
+        try:
+            snow.close()
+        except Exception:
+            pass
+        logging.info("Ingest complete")
