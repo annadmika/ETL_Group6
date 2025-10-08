@@ -7,6 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tempfile
 
+
 from dotenv import load_dotenv
 from snowflake.ingest import SimpleIngestManager
 from snowflake.ingest import StagedFile
