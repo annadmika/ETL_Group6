@@ -8,7 +8,9 @@ The pipeline uses Snowflake’s multi-layer architecture (RAW → SILVER → GOL
 ======================================================
 
 1. RAW Layer — Data Ingestion
+
 Purpose: Store unprocessed raw data exactly as it is ingested from the source.
+
 - Tables:
     - RAW_CLIENT_SUPPORT_ORDERS_PY_SNOWPIPE
     - RAW_CARBON_EMISSIONS_PY_SNOWPIPE
@@ -25,11 +27,16 @@ A Python script (snowpipe_orders.py) triggers Snowpipe when new source files are
 ======================================================
 
 2. SILVER Layer — Data Cleaning
+
 Purpose: Clean and standardize the raw data for analytical use.
 
 - Tables:
     - CLIENT_SUPPORT_ORDERS_CLEAN
     - CARBON_EMISSIONS_CLEAN
+
+- Tasks: (Tasks are triggered automatically after their corresponding RAW streams detect new data)
+    - task_clean_orders → merges new orders from RAW_CLIENT_SUPPORT_ORDERS_STREAM into CLIENT_SUPPORT_ORDERS_CLEAN
+    - task_clean_emissions → merges new emissions data from RAW_CARBON_EMISSIONS_STREAM into CARBON_EMISSIONS_CLEAN
 
 Silver layer cleaning includes:
 - Removing duplicate transactions (TXID)
@@ -37,10 +44,6 @@ Silver layer cleaning includes:
 - Standardizing bag sizes to uppercase
 - Nulling invalid or future timestamps
 - Handling negative or null carbon emissions values
-
-- Tasks: (Tasks are triggered automatically after their corresponding RAW streams detect new data)
-    - task_clean_orders → merges new orders from RAW_CLIENT_SUPPORT_ORDERS_STREAM into CLIENT_SUPPORT_ORDERS_CLEAN
-    - task_clean_emissions → merges new emissions data from RAW_CARBON_EMISSIONS_STREAM into CARBON_EMISSIONS_CLEAN
 
 These tasks run immediately after new data ingestion, ensuring that SILVER tables are always up to date.
 
