@@ -4,7 +4,7 @@
 2. NAME of user created : INSTRUCTOR_USER
 3. PASSWORD of user created : 234
 
-4. YOUR ACCOUNT URL: https://app.snowflake.com/fcvvvvl/zib75701/#/homepage
+4. YOUR ACCOUNT URL: https://app.snowflake.com/knzdnhq/ypb01288/#/homepage
    
 
 5. CREDENTIALS FOR INSTRUCTOR:
