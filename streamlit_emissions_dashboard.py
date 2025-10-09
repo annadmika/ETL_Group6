@@ -15,8 +15,8 @@ query = "SELECT * FROM STREAMLIT_APPS.GOLD_COPY.CARBON_EMISSIONS"
 df = session.sql(query).to_pandas()
 
 # ---------------- Streamlit layout ----------------
-st.set_page_config(page_title="Coffee Carbon Emissions Dashboard", layout="wide")
-st.title("☕ Coffee Carbon Emissions Dashboard 🌱")
+st.set_page_config(page_title="ECOCoffeeTM Carbon Emissions Dashboard", layout="wide")
+st.title("☕ ECOCoffee(TM) Carbon Emissions Monitoring Dashboard 🌱")
 
 # Sidebar filters
 warehouse_filter = st.sidebar.multiselect(
@@ -90,6 +90,8 @@ fig3 = px.bar(
 fig3.update_layout(barmode='stack')
 st.plotly_chart(fig3, use_container_width=True)
 
+
+'''
 # 4. Emissions by Origin Country (Map)
 st.subheader("Emissions by Coffee Origin Country")
 origin_emissions = filtered_df.groupby('ORIGIN_COUNTRY')['ESTIMATED_EMISSIONS_KGCO2E'].sum().reset_index()
@@ -102,6 +104,25 @@ fig4 = px.choropleth(
     title='Emissions by Coffee Origin Country',
     labels={'ESTIMATED_EMISSIONS_KGCO2E': 'Estimated Emissions (kg CO2e)', 'ORIGIN_COUNTRY': 'Origin Country'}
 )
+st.plotly_chart(fig4, use_container_width=True)
+'''
+
+# 4.B Emissions by Origin Country (Bar Chart)
+st.subheader("Emissions by Coffee Origin Country")
+origin_emissions = filtered_df.groupby('ORIGIN_COUNTRY')['ESTIMATED_EMISSIONS_KGCO2E'].sum().reset_index()
+fig4 = px.bar(
+    origin_emissions,
+    x='ORIGIN_COUNTRY',
+    y='ESTIMATED_EMISSIONS_KGCO2E',
+    title='Emissions by Coffee Origin Country',
+    labels={
+        'ESTIMATED_EMISSIONS_KGCO2E': 'Estimated Emissions (kg CO2e)',
+        'ORIGIN_COUNTRY': 'Origin Country'
+    },
+    color='ESTIMATED_EMISSIONS_KGCO2E',
+    color_continuous_scale='Greens'
+)
+fig4.update_layout(xaxis={'categoryorder': 'total descending'})
 st.plotly_chart(fig4, use_container_width=True)
 
 # 5. Distance Class Breakdown
