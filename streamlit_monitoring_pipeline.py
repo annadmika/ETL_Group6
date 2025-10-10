@@ -317,14 +317,63 @@ except Exception as e:
 
 
 # ======================== F) DATA QUALITY ========================
-st.markdown("### ✅ Data Quality (SILVER.CLIENT_SUPPORT_ORDERS_CLEAN)")
-dq_rows=[]
-try:
-    df = read_sql(f'SELECT COUNT(*) N, SUM(IFF("CUSTOMER_ID" IS NULL,1,0)) N_NULL FROM {DB}.{SILVER}.CLIENT_SUPPORT_ORDERS_CLEAN')
-    rate = (df.N_NULL[0] or 0)/max(1,df.N[0])*100
-    dq_rows.append({"check":"Null rate CUSTOMER_ID","value":f"{rate:.1f}%","status":"PASS" if rate<5 else "FAIL"})
-except: pass
+st.markdown("### ✅ Data Quality Checks")
 
-dq = pd.DataFrame(dq_rows) if dq_rows else pd.DataFrame([{"check":"(example)","value":"—","status":"PASS"}])
-dq["result"]=dq["status"].apply(lambda s: f"<span class='{ 'pass' if s=='PASS' else 'fail'}'>{s}</span>")
-st.write(dq[["check","value","result"]].to_html(escape=False,index=False), unsafe_allow_html=True)
+dq_rows = []
+
+# ---- ORDERS QUALITY CHECKS ----
+try:
+    df_orders = read_sql(f"""
+        SELECT 
+            COUNT(*) AS N,
+            SUM(IFF("CUSTOMER_ID" IS NULL, 1, 0)) AS N_NULL_CUSTOMER,
+            SUM(IFF("TXID" IS NULL, 1, 0)) AS N_NULL_TXID,
+            COUNT(DISTINCT "TXID") AS N_DISTINCT_TXID,
+            SUM(IFF("PURCHASE_TIME" > CURRENT_TIMESTAMP(), 1, 0)) AS N_FUTURE_PURCHASES
+        FROM {DB}.{SILVER}.CLIENT_SUPPORT_ORDERS_CLEAN
+    """)
+
+    total = df_orders["N"][0] or 1
+
+    null_customer_rate = df_orders["N_NULL_CUSTOMER"][0] / total * 100
+    null_txid_rate = df_orders["N_NULL_TXID"][0] / total * 100
+    duplicate_txid = total - df_orders["N_DISTINCT_TXID"][0]
+    future_purchases = df_orders["N_FUTURE_PURCHASES"][0]
+
+    dq_rows += [
+        {"check": "Null rate CUSTOMER_ID", "value": f"{null_customer_rate:.1f}%", "status": "PASS" if null_customer_rate < 5 else "FAIL"},
+        {"check": "Null rate TXID", "value": f"{null_txid_rate:.1f}%", "status": "PASS" if null_txid_rate < 5 else "FAIL"},
+        {"check": "Duplicate TXID count", "value": f"{duplicate_txid}", "status": "PASS" if duplicate_txid == 0 else "FAIL"},
+        {"check": "Future PURCHASE_TIME", "value": f"{future_purchases}", "status": "PASS" if future_purchases == 0 else "FAIL"},
+    ]
+
+except Exception as e:
+    st.warning(f"⚠️ Error checking orders data: {e}")
+
+# ---- EMISSIONS QUALITY CHECKS ----
+try:
+    df_emissions = read_sql(f"""
+        SELECT 
+            COUNT(*) AS N,
+            SUM(IFF("ESTIMATED_EMISSIONS_KGCO2E" < 0, 1, 0)) AS N_NEGATIVE,
+            SUM(IFF("REPORTING_MONTH" > CURRENT_DATE(), 1, 0)) AS N_FUTURE_REPORTS
+        FROM {DB}.{SILVER}.CARBON_EMISSIONS_CLEAN
+    """)
+
+    total_em = df_emissions["N"][0] or 1
+    negative_emissions = df_emissions["N_NEGATIVE"][0]
+    future_reports = df_emissions["N_FUTURE_REPORTS"][0]
+
+    dq_rows += [
+        {"check": "Negative ESTIMATED_EMISSIONS_KGCO2E", "value": f"{negative_emissions}", "status": "PASS" if negative_emissions == 0 else "FAIL"},
+        {"check": "Future REPORTING_MONTH", "value": f"{future_reports}", "status": "PASS" if future_reports == 0 else "FAIL"},
+    ]
+
+except Exception as e:
+    st.warning(f"⚠️ Error checking emissions data: {e}")
+
+# ---- DISPLAY RESULTS ----
+dq = pd.DataFrame(dq_rows) if dq_rows else pd.DataFrame([{"check": "(example)", "value": "—", "status": "PASS"}])
+dq["result"] = dq["status"].apply(lambda s: f"<span class='{ 'pass' if s=='PASS' else 'fail'}'>{s}</span>")
+
+st.write(dq[["check", "value", "result"]].to_html(escape=False, index=False), unsafe_allow_html=True)
